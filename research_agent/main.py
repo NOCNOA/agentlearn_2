@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.search_arxiv import search_arxiv
+from tools.get_arxiv_paper import get_arxiv_paper
 
 
 load_dotenv()
@@ -72,6 +73,32 @@ TOOLS = [
 
             },
         },
+    },
+        {
+        "type": "function",
+        "function": {
+            "name": "get_arxiv_paper",
+            "description": (
+                "根据 arXiv ID 读取一篇论文的详细信息，"
+                "包括完整摘要、作者、发布时间和论文类别。"
+                "应先使用 search_arxiv 找到论文 ID，"
+                "再用本工具读取最相关论文。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "arxiv_id": {
+                        "type": "string",
+                        "description": (
+                            "论文的 arXiv ID，例如 2608.20788；"
+                            "也可以传入 arXiv URL。"
+                        ),
+                    }
+                },
+                "required": ["arxiv_id"],
+                "additionalProperties": False,
+            },
+        },
     }
 ]
 
@@ -82,6 +109,7 @@ TOOLS = [
 
 TOOL_REGISTRY = {
     "search_arxiv": search_arxiv,
+    "get_arxiv_paper": get_arxiv_paper
 }
 
 
@@ -96,12 +124,19 @@ def run_agent(user_input: str):
         {
             "role": "system",
             "content": (
-                "你是论文搜索助手。"
+                """
+                你是一个论文研究助手，可以搜索并阅读 arXiv 论文。
 
-                "最多调用 搜索工具 1 次。"
-                "得到足够结果后必须停止搜索，并根据已有结果回答。"
-                "如果搜索结果不足，应明确说明，而不是无限更换关键词。"
-                "不要重复使用相同或高度相似的查询。"
+                工作流程：
+                1. 首先使用 search_arxiv 搜索相关候选论文。
+                2. 根据标题、作者和发布时间判断相关性。
+                3. 只对最相关的 1 到 3 篇论文调用 get_arxiv_paper。
+                4. 阅读论文摘要后生成最终回答。
+                5. 不要重复执行相同查询。
+                6. 信息足够后立即停止调用工具。
+                7. 不得根据标题猜测论文内容；只有读取详细信息后，
+                才能描述论文的方法和贡献。
+                """
                 
             ),
         },
@@ -118,13 +153,19 @@ def run_agent(user_input: str):
     for step in range(max_steps):
 
         print(f"\n========== Agent Step {step + 1} ==========")
-
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
-        )
+        print(f"Messages count: {len(messages)}")
+        
+        try:
+            response = client.chat.completions.create(
+                model=MODEL,
+                messages=messages,
+                tools=TOOLS,
+                tool_choice="auto",
+            )
+        except Exception as e:
+            print(f"Error occurred: {e}")
+            print(f"Current messages: {json.dumps(messages, ensure_ascii=False, indent=2)}")
+            raise
 
         message = response.choices[0].message
 
@@ -146,9 +187,26 @@ def run_agent(user_input: str):
         print("\nAgent wants to use tools:")
 
         # 必须把 assistant 的 tool call 记录加入历史
-        messages.append(
-            message.model_dump(exclude_none=True)
-        )
+        assistant_msg = {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.function.name,
+                        "arguments": call.function.arguments
+                    }
+                }
+                for call in message.tool_calls
+            ]
+        }
+        
+        # 如果 content 不为空，才添加 content 字段
+        if message.content:
+            assistant_msg["content"] = message.content
+        
+        messages.append(assistant_msg)
 
         for tool_call in message.tool_calls:
 
@@ -173,14 +231,11 @@ def run_agent(user_input: str):
                         "error": "Invalid JSON arguments"
                     }
                 )
-
             else:
-
                 print(
                     "Arguments:",
                     arguments,
                 )
-
                 # -------------------------------------------
                 # 检查 Tool 是否存在
                 # -------------------------------------------
@@ -206,9 +261,18 @@ def run_agent(user_input: str):
 
                     try:
 
-                        tool_result = tool_function(
+                        result = tool_function(
                             **arguments
                         )
+                        
+                        # 确保结果是字符串（JSON 格式）
+                        if isinstance(result, str):
+                            tool_result = result
+                        else:
+                            tool_result = json.dumps(
+                                result,
+                                ensure_ascii=False,
+                            )
 
                     except Exception as e:
 
@@ -250,9 +314,9 @@ def run_agent(user_input: str):
 
 if __name__ == "__main__":
 
-    question = (
-        "帮我找一下最多5篇和 large disparity "
-        "相关的 stereo matching 论文。"
-    )
+    question = """
+    请搜索与 large-disparity stereo matching 相关的论文，
+    选择最相关的两篇，读取摘要后分别说明研究问题、主要方法和可能的局限。
+    """
 
     run_agent(question)

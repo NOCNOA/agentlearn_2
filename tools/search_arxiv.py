@@ -30,20 +30,16 @@ def search_arxiv(query: str, max_results: int = 5):
 
         papers.append(
             {
+                "arxiv_id": entry.id.split("/abs/")[-1],
                 "title": entry.title.strip(),
-
                 "authors": [
                     author.name
                     for author in entry.authors
                 ],
-
-                "summary": entry.summary.strip(),
-
                 "published": entry.published,
-
                 "url": entry.link,
             }
-        )
+)
     
     result = {
         "query": query,
