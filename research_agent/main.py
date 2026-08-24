@@ -4,6 +4,15 @@ import json
 from dotenv import load_dotenv
 from openai import OpenAI
 
+import sys
+from pathlib import Path
+
+# 添加项目根目录到 sys.path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from tools.search_arxiv import search_arxiv
+
+
 load_dotenv()
 
 
@@ -16,97 +25,10 @@ client = OpenAI(
     base_url=os.environ["LLM_BASE_URL"],
 )
 
-#
 MODEL = os.getenv("LLM_MODEL", "DeepSeek-V4-Flash-0731")
 
-
 # ============================================================
-# 2. 假装这是我们的论文数据库
-# ============================================================
-
-PAPER_DATABASE = [
-    {
-        "title": "IGEV-Stereo",
-        "keywords": [
-            "stereo",
-            "cost volume",
-            "geometry encoding",
-            "iterative"
-        ],
-    },
-    {
-        "title": "FoundationStereo",
-        "keywords": [
-            "stereo",
-            "foundation model",
-            "zero-shot",
-            "cost volume"
-        ],
-    },
-    {
-        "title": "RAFT-Stereo",
-        "keywords": [
-            "stereo",
-            "iterative",
-            "correlation",
-            "GRU"
-        ],
-    },
-    {
-        "title": "Large Disparity Stereo Example",
-        "keywords": [
-            "stereo",
-            "large disparity",
-            "large disparity range"
-        ],
-    },
-]
-
-
-# ============================================================
-# 3. 真正的 Python Tool
-# ============================================================
-
-def search_papers(keyword: str) -> str:
-    """
-    根据 keyword 搜索论文。
-    """
-
-    keyword = keyword.lower()
-
-    results = []
-
-    for paper in PAPER_DATABASE:
-
-        text = (
-            paper["title"]
-            + " "
-            + " ".join(paper["keywords"])
-        ).lower()
-
-        if keyword in text:
-            results.append(paper)
-
-    if not results:
-        return json.dumps(
-            {
-                "count": 0,
-                "papers": [],
-            },
-            ensure_ascii=False,
-        )
-
-    return json.dumps(
-        {
-            "count": len(results),
-            "papers": results,
-        },
-        ensure_ascii=False,
-    )
-
-
-# ============================================================
-# 4. 告诉 LLM：你有哪些工具
+# 2. 告诉 LLM：你有哪些工具
 # ============================================================
 
 TOOLS = [
@@ -115,10 +37,10 @@ TOOLS = [
 
         "function": {
 
-            "name": "search_papers",
+            "name": "search_arxiv",
 
             "description": (
-                "Search the local paper database using a keyword. "
+                "Search the online paper research tool using a keyword. "
                 "Use this tool when the user asks about papers, "
                 "research methods, or related literature."
             ),
@@ -129,17 +51,24 @@ TOOLS = [
 
                 "properties": {
 
-                    "keyword": {
+                    "query": {
                         "type": "string",
                         "description": (
                             "The keyword used to search papers, "
                             "for example: large disparity"
                         ),
-                    }
-
+                    },
+                    
+                    "max_results": {
+                        "type": "int",
+                        "description": (
+                            "The number that papers return, "
+                            "for example: 5"
+                        ),
+                    },
                 },
 
-                "required": ["keyword"],
+                "required": ["query", "max_results"],
 
             },
         },
@@ -152,7 +81,7 @@ TOOLS = [
 # ============================================================
 
 TOOL_REGISTRY = {
-    "search_papers": search_papers,
+    "search_arxiv": search_arxiv,
 }
 
 
@@ -167,10 +96,13 @@ def run_agent(user_input: str):
         {
             "role": "system",
             "content": (
-                "You are a research assistant. "
-                "When the user asks about papers or research, "
-                "use available tools when necessary. "
-                "Do not fabricate search results."
+                "你是论文搜索助手。"
+
+                "最多调用 搜索工具 1 次。"
+                "得到足够结果后必须停止搜索，并根据已有结果回答。"
+                "如果搜索结果不足，应明确说明，而不是无限更换关键词。"
+                "不要重复使用相同或高度相似的查询。"
+                
             ),
         },
 
@@ -319,7 +251,7 @@ def run_agent(user_input: str):
 if __name__ == "__main__":
 
     question = (
-        "帮我找一下和 large disparity "
+        "帮我找一下最多5篇和 large disparity "
         "相关的 stereo matching 论文。"
     )
 
