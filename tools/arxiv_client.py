@@ -30,12 +30,13 @@ def _retry_after_seconds(response: requests.Response) -> float:
         return 0.0
 
 
-def arxiv_get(
+def arxiv_request(
+    url: str,
     params: dict,
     timeout: int = 30,
     max_attempts: int = 3,
 ) -> requests.Response:
-    """Call the legacy arXiv API politely and retry transient failures."""
+    """Call an arXiv endpoint politely and retry transient failures."""
     global _last_request_started_at
 
     last_error = None
@@ -56,7 +57,7 @@ def arxiv_get(
 
             try:
                 response = _session.get(
-                    ARXIV_API_URL,
+                    url,
                     params=params,
                     timeout=timeout,
                 )
@@ -98,3 +99,31 @@ def arxiv_get(
         f"arXiv request failed after {max_attempts} attempts: "
         f"{last_error}"
     ) from last_error
+
+
+def arxiv_get(
+    params: dict,
+    timeout: int = 30,
+    max_attempts: int = 3,
+) -> requests.Response:
+    """Call the legacy arXiv metadata API."""
+    return arxiv_request(
+        ARXIV_API_URL,
+        params=params,
+        timeout=timeout,
+        max_attempts=max_attempts,
+    )
+
+
+def arxiv_download_pdf(
+    arxiv_id: str,
+    timeout: int = 60,
+    max_attempts: int = 3,
+) -> requests.Response:
+    """Download an arXiv PDF through the same rate-limited session."""
+    return arxiv_request(
+        f"https://arxiv.org/pdf/{arxiv_id}",
+        params={},
+        timeout=timeout,
+        max_attempts=max_attempts,
+    )

@@ -78,6 +78,12 @@ MODEL = os.getenv("LLM_MODEL", "DeepSeek-V4-Flash-0731")
 # 3. Agent运行主体
 # ============================================================
 READER_PROMPT = """
+Tool-use rules:
+- First call get_arxiv_paper for a candidate. Copy its arXiv ID exactly.
+- Call get_arxiv_pdf_text only after its abstract was read and only when the
+  abstract lacks a technical detail needed for the user's question.
+- Read PDF text for at most two papers. Do not retry an identical failed call.
+
 你是论文研究流程中的 Reader Agent。
 
 你的职责：
@@ -149,7 +155,10 @@ EVIDENCE_PROMPT = """
 READING_TOOLS = [
     tool
     for tool in TOOLS
-    if tool["function"]["name"] == "get_arxiv_paper"
+    if tool["function"]["name"] in {
+        "get_arxiv_paper",
+        "get_arxiv_pdf_text",
+    }
 ]
 
 
@@ -319,21 +328,31 @@ def run_reader_agent(
                             try:
                                 result = tool_function(**arguments)
 
-                                if (
-                                    function_name == "get_arxiv_paper"
-                                    and isinstance(result, dict)
-                                    and "error" not in result
-                                ):
+                                if isinstance(result, dict) and "error" not in result:
                                     successful_calls[call_signature] = result
 
                                     arxiv_id = result.get("arxiv_id")
-                                    if arxiv_id:
+                                    if (
+                                        function_name == "get_arxiv_paper"
+                                        and arxiv_id
+                                    ):
                                         collected_papers[arxiv_id] = result
+                                        print(
+                                            "Collected papers: "
+                                            f"{len(collected_papers)}"
+                                        )
 
-                                    print(
-                                        "Collected papers: "
-                                        f"{len(collected_papers)}"
-                                    )
+                                    elif (
+                                        function_name == "get_arxiv_pdf_text"
+                                        and arxiv_id in collected_papers
+                                    ):
+                                        collected_papers[arxiv_id][
+                                            "pdf_excerpt"
+                                        ] = result
+                                        print(
+                                            "Attached PDF text to paper: "
+                                            f"{arxiv_id}"
+                                        )
                             except Exception as exc:
                                 result = {
                                     "error": "Tool execution failed",
