@@ -1,3 +1,11 @@
 .env
 __pycache__/
 *.py[cod]
+
+#results
+results/
+*.log
+*.out
+
+#env
+*.env

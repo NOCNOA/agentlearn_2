@@ -1,26 +1,39 @@
-import requests
 import feedparser
 import json
+import re
+
+from tools.arxiv_client import arxiv_get
+
+
+def build_arxiv_query(query: str) -> str:
+    """Convert plain keywords into an explicit arXiv AND query.
+
+    ``all:large disparity stereo`` does not apply ``all:`` independently to
+    every word.  The explicit form below is both unambiguous and narrower:
+    ``all:large AND all:disparity AND all:stereo``.
+    """
+    terms = re.findall(r"[A-Za-z0-9][A-Za-z0-9_.+\-]*", query)
+
+    if not terms:
+        raise ValueError("The arXiv query must contain at least one search term")
+
+    return " AND ".join(f"all:{term}" for term in terms)
+
 
 def search_arxiv(query: str, max_results: int = 5):
 
-    url = "https://export.arxiv.org/api/query"
-
     params = {
-        "search_query": f"all:{query}",
+        "search_query": build_arxiv_query(query),
         "start": 0,
         "max_results": max_results,
         "sortBy": "relevance",
         "sortOrder": "descending",
     }
 
-    response = requests.get(
-        url,
+    response = arxiv_get(
         params=params,
-        timeout=20,
+        timeout=30,
     )
-
-    response.raise_for_status()
 
     feed = feedparser.parse(response.text)
 

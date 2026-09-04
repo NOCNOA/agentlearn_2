@@ -1,6 +1,7 @@
 import re
-import requests
 import feedparser
+
+from tools.arxiv_client import arxiv_get
 
 
 def normalize_arxiv_id(arxiv_id: str) -> str:
@@ -23,16 +24,13 @@ def normalize_arxiv_id(arxiv_id: str) -> str:
 def get_arxiv_paper(arxiv_id: str):
     arxiv_id = normalize_arxiv_id(arxiv_id)
 
-    response = requests.get(
-        "https://export.arxiv.org/api/query",
+    response = arxiv_get(
         params={
             "id_list": arxiv_id,
             "max_results": 1,
         },
-        timeout=20,
+        timeout=30,
     )
-
-    response.raise_for_status()
 
     feed = feedparser.parse(response.text)
 
@@ -60,7 +58,7 @@ def get_arxiv_paper(arxiv_id: str):
         ],
         "url": entry.link,
     }
-    
+
 if __name__ == "__main__":
     paper = get_arxiv_paper("2608.20788")
     print(paper)
