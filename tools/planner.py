@@ -1,5 +1,6 @@
 import json
 import os, re, sys
+from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
@@ -8,7 +9,14 @@ from openai import OpenAI
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from tools.search_arxiv import search_arxiv
 MODEL = os.getenv("LLM_MODEL", "DeepSeek-V4-Flash-0731")
+CURRENT_YEAR = datetime.now().year
 PLANNER_PROMPT = """
+You must include a year_range object with integer start_year and end_year.
+If the user requests recent or latest work, use the most recent three calendar
+years, ending in the current calendar year. If no time range is stated, use the same
+default. Only use an older or wider range when the user explicitly asks for
+classic work, historical development, or a specific period.
+
 你是论文调研规划器。
 
 你的任务不是回答用户问题，也不是搜索论文，而是生成一个简短的
@@ -25,6 +33,10 @@ arXiv 搜索计划。
 输出格式：
 {
   "research_goal": "...",
+  "year_range": {
+    "start_year": 2023,
+    "end_year": 2026
+  },
   "queries": [
     {
       "query": "...",
@@ -39,12 +51,30 @@ def validate_search_plan(plan: dict) -> dict:
 
     research_goal = plan.get("research_goal")
     queries = plan.get("queries")
+    year_range = plan.get("year_range")
 
     if not isinstance(research_goal, str):
         raise ValueError("research_goal must be a string.")
 
     if not isinstance(queries, list):
         raise ValueError("queries must be a list.")
+
+    if not isinstance(year_range, dict):
+        raise ValueError("year_range must be a dictionary.")
+
+    start_year = year_range.get("start_year")
+    end_year = year_range.get("end_year")
+
+    if not isinstance(start_year, int) or not isinstance(end_year, int):
+        raise ValueError("year_range must contain integer start_year and end_year.")
+
+    if start_year > end_year:
+        raise ValueError("year_range start_year cannot be later than end_year.")
+
+    if start_year < 1991 or end_year > CURRENT_YEAR:
+        raise ValueError(
+            f"year_range must be between 1991 and {CURRENT_YEAR}."
+        )
 
     validated_queries = []
     seen_queries = set()
@@ -83,6 +113,10 @@ def validate_search_plan(plan: dict) -> dict:
 
     return {
         "research_goal": research_goal.strip(),
+        "year_range": {
+            "start_year": start_year,
+            "end_year": end_year,
+        },
         "queries": validated_queries,
     }
 
@@ -115,17 +149,24 @@ def execute_search_plan(
     ):
         query = query_item["query"]
         purpose = query_item["purpose"]
+        year_range = search_plan["year_range"]
 
         print(
             f"\n========== Planned Search {index} =========="
         )
         print(f"Query: {query}")
         print(f"Purpose: {purpose}")
+        print(
+            "Year range: "
+            f"{year_range['start_year']} to {year_range['end_year']}"
+        )
 
         try:
             result = search_arxiv(
                 query=query,
                 max_results=max_results_per_query,
+                start_year=year_range["start_year"],
+                end_year=year_range["end_year"],
             )
         except Exception as exc:
             print(f"Search failed: {exc}")
@@ -233,13 +274,13 @@ def rank_candidate_papers(
     limit: int = 15,
 ) -> list[dict]:
 
-    ranked = sorted(
-        papers,
-        key=lambda paper: len(
-            paper.get("matched_queries", [])
-        ),
-        reverse=True,
-    )
+    def ranking_key(paper: dict) -> tuple[int, str]:
+        return (
+            len(paper.get("matched_queries", [])),
+            paper.get("published", ""),
+        )
+
+    ranked = sorted(papers, key=ranking_key, reverse=True)
 
     return ranked[:limit]
 

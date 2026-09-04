@@ -5,7 +5,11 @@ import re
 from tools.arxiv_client import arxiv_get
 
 
-def build_arxiv_query(query: str) -> str:
+def build_arxiv_query(
+    query: str,
+    start_year: int | None = None,
+    end_year: int | None = None,
+) -> str:
     """Convert plain keywords into an explicit arXiv AND query.
 
     ``all:large disparity stereo`` does not apply ``all:`` independently to
@@ -17,16 +21,39 @@ def build_arxiv_query(query: str) -> str:
     if not terms:
         raise ValueError("The arXiv query must contain at least one search term")
 
-    return " AND ".join(f"all:{term}" for term in terms)
+    keyword_query = " AND ".join(f"all:{term}" for term in terms)
+
+    if start_year is None and end_year is None:
+        return keyword_query
+
+    if start_year is None or end_year is None:
+        raise ValueError("start_year and end_year must be provided together")
+
+    if start_year > end_year:
+        raise ValueError("start_year cannot be later than end_year")
+
+    date_query = (
+        f"submittedDate:[{start_year}01010000 TO {end_year}12312359]"
+    )
+    return f"({keyword_query}) AND {date_query}"
 
 
-def search_arxiv(query: str, max_results: int = 5):
+def search_arxiv(
+    query: str,
+    max_results: int = 5,
+    start_year: int | None = None,
+    end_year: int | None = None,
+):
 
     params = {
-        "search_query": build_arxiv_query(query),
+        "search_query": build_arxiv_query(
+            query,
+            start_year=start_year,
+            end_year=end_year,
+        ),
         "start": 0,
         "max_results": max_results,
-        "sortBy": "relevance",
+        "sortBy": "submittedDate" if start_year is not None else "relevance",
         "sortOrder": "descending",
     }
 
@@ -56,6 +83,11 @@ def search_arxiv(query: str, max_results: int = 5):
     
     result = {
         "query": query,
+        "year_range": (
+            {"start_year": start_year, "end_year": end_year}
+            if start_year is not None
+            else None
+        ),
         "count": len(papers),
         "papers": papers,
     }
