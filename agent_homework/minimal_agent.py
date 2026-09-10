@@ -4,12 +4,18 @@ import os, json
 load_dotenv()
 MODEL = os.getenv("LLM_MODEL", "DeepSeek-V4-Flash-0731")
 
-
+MAX_AGENT_STEPS = 5
+MAX_TOOL_CALLS = 4
 def add_numbers(a: int, b: int) -> int:
     return a + b
 
 def multi_numbers(a: int, b: int) -> int:
     return a * b
+
+def divide_numbers(a: int, b: int) -> float:
+    if b == 0:
+        raise ValueError("Cannot divide by zero.")
+    return a / b
 
 TOOLS = [
     {
@@ -55,12 +61,36 @@ TOOLS = [
             },
 
         }
-    }
+    },
+    {
+            "type": "function",
+            "function":{
+                "name": "divide_numbers",
+                "description":"calculate the divide of a and b.",
+                "parameters":{
+                    "type": "object",
+                    "properties": {
+                        "a":{
+                            "type": "integer",
+                            "description": "first parameter",
+                        },
+                        "b":{
+                            "type": "integer",
+                            "description": "second parameter",
+                        },   
+                    },
+                "required": ["a", "b"],
+                },
+
+            }
+        }
 ]
 
 TOOL_REGISTRY = {
     "add_numbers": add_numbers,
     "multi_numbers": multi_numbers,
+    "divide_numbers":divide_numbers
+    
 }
 
 
@@ -92,8 +122,8 @@ def run_agent(user_input: str):
             "content": user_input,
         },
     ]
-
-    for step in range(5):
+    tool_call_count = 0
+    for step in range(MAX_AGENT_STEPS):
         print(f"\n========== Agent Step {step} ==========")
         # 1. 调用模型
         response = get_client().chat.completions.create(
@@ -102,48 +132,62 @@ def run_agent(user_input: str):
             tools=TOOLS,
             temperature=0,
         )
+        
+        
         # 2. 判断有没有 tool_calls
         message = response.choices[0].message
-        
+        print("====model output====")
+        print(message.content)
         # 3. 没有则返回最终回答
         if not message.tool_calls:
-            print("\nFinish.")
+            print(f"\nFinish. Using Tools for {tool_call_count} times")
             return message.content
         
         # 4. 有则保存 assistant 消息
         messages.append(message.model_dump(exclude_none=True))#上一轮信息保存为字典对象，加到messages当中
         for tool_call in message.tool_calls:
-            function_name = tool_call.function.name
-            raw_arguments = tool_call.function.arguments
-
-            print(f"\nTool: {function_name}")
-            print(f"Raw Arguments: {raw_arguments}")
-            
-            try:
-                arguments = json.loads(raw_arguments)
-            except json.JSONDecodeError as exc:
+            tool_call_count += 1
+        
+            if tool_call_count > MAX_TOOL_CALLS:
                 result = {
-                    "error": "Invalid tool arguments",
-                    "details": str(exc),
-                    "raw_arguments": raw_arguments,
+                    "error": "Tool-call budget exhausted",
+                    "instruction": (
+                        "Do not call more tools. "
+                        "Answer using existing results."
+                    ),
                 }
+            else:    
+                function_name = tool_call.function.name
+                raw_arguments = tool_call.function.arguments
 
-            else:
-                tool_function = TOOL_REGISTRY.get(function_name)
-                if tool_function is None:
+                print(f"\nTool: {function_name}")
+                print(f"Raw Arguments: {raw_arguments}")
+                
+                try:
+                    arguments = json.loads(raw_arguments)
+                except json.JSONDecodeError as exc:
                     result = {
-                        "error": "Unknown tool",
-                        "tool": function_name,
+                        "error": "Invalid tool arguments",
+                        "details": str(exc),
+                        "raw_arguments": raw_arguments,
                     }
+
                 else:
-                    try:
-                        result = tool_function(**arguments)
-                    except Exception as exc:
+                    tool_function = TOOL_REGISTRY.get(function_name)
+                    if tool_function is None:
                         result = {
-                            "error": "Tool execution failed",
+                            "error": "Unknown tool",
                             "tool": function_name,
-                            "details": str(exc),
                         }
+                    else:
+                        try:
+                            result = tool_function(**arguments)
+                        except Exception as exc:
+                            result = {
+                                "error": "Tool execution failed",
+                                "tool": function_name,
+                                "details": str(exc),
+                            }
             print(f"Tool Result: {result}")
             # 5. 将 tool result 写回 messages
             messages.append(
@@ -162,7 +206,7 @@ def run_agent(user_input: str):
 
 
 def main():
-    question = "先计算 27 加 58，再把结果乘以 3"
+    question = "请使用工具计算 10 除以 0。"
     result = run_agent(question)
 
     print("\n========== Final Answer ==========")
