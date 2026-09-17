@@ -27,7 +27,7 @@ TOOLS = [
                     },
                     
                     "max_results": {
-                        "type": "int",
+                        "type": "integer",
                         "description": (
                             "The number that papers return, "
                             "for example: 5"

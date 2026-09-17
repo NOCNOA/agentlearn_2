@@ -6,6 +6,7 @@ __pycache__/
 results/
 *.log
 *.out
+*.json
 
 #env
 *.env

@@ -1,0 +1,600 @@
+Agent 学习主线计划
+==================
+
+一、学习总目标
+--------------
+
+本课程的目标不是简单调用一个大模型接口，也不是直接套用 LangChain、LangGraph
+等框架，而是从底层亲手实现 Agent，最终能够：
+
+1. 理解模型、工具、消息协议、状态和工作流分别负责什么。
+2. 独立写出“模型决策—工具执行—结果写回—继续决策”的 Agent 循环。
+3. 判断一个模块究竟是普通 Python 函数、模型节点、Agent，还是工作流。
+4. 将复杂任务拆成 Planner、Executor、Reader、Writer 等职责明确的节点。
+5. 理解单 Agent 工作流和多 Agent 协作的区别。
+6. 能阅读、调试和改造当前 research_agent，而不是只知道它能运行。
+7. 在完成核心原理后，再决定是否学习框架、自动评测和生产级可靠性。
+
+最终能力标准：面对一个新任务，能够自己判断是否需要 Agent、需要哪些工具、
+状态中保存什么、循环如何停止，以及是否真的有必要使用多 Agent。
+
+
+二、教学原则与要求
+------------------
+
+1. 严格沿主线推进
+
+   每一节必须回答一个明确的 Agent 核心问题。缓存、完整日志、并发、复杂验证、
+   部署等内容，除非当前知识点必须使用，否则归入可选工程阶段。
+
+2. 先手写底层，再使用框架
+
+   在没有理解 messages、tool_calls、tool_call_id、循环、状态和路由之前，不引入
+   Agent 框架。以后学习框架时，要能够指出框架替我们封装了哪段手写逻辑。
+
+3. 一次只增加一个新概念
+
+   重构时尽量保持输出不变。若某一步只是改变代码组织方式，必须明确说明它不会
+   改善回答质量，避免把“结构变化”误认为“能力变化”。
+
+4. 以运行和解释作为验收
+
+   每一阶段不仅要求代码能运行，还要求能够用自己的话解释信息流、控制流和停止
+   条件。不能只依靠复制代码完成课程。
+
+5. 区分核心功能和工程增强
+
+   核心功能解决“Agent 如何工作”；工程增强解决“Agent 如何更稳定地长期运行”。
+   两者都可能有价值，但教学时不得混为一谈。
+
+6. 保留现有成果
+
+   已经成功的 research_agent 不作为随意实验对象。新概念优先放在
+   agent_homework 中验证，理解后再决定是否迁移到正式研究工作流。
+
+
+三、完整学习路线与当前进度
+--------------------------
+
+阶段 1：模型消息与工具协议【已完成】
+
+学习目的：理解 Agent 最底层不是“一个智能类”，而是一组消息和工具调用协议。
+
+学习内容：
+
+- system、user、assistant、tool 四种常用消息角色。
+- assistant 的 content 与 tool_calls 的区别。
+- 工具 Schema 中 name、description、parameters、required 的作用。
+- type="function" 的含义。
+- tool_call_id 为什么必须写回，以及它如何关联请求和结果。
+- 工具描述 TOOLS 与真实函数 TOOL_REGISTRY 的区别。
+
+实践文件：
+
+- agent_homework/minimal_agent.py
+- tools/Tool_desc.py
+- tools/Tool_registry.py
+
+验收要求：
+
+- 能解释模型为什么不能直接执行 Python 函数。
+- 能解释 Schema 是给模型看的，而 Registry 是给程序执行的。
+- 每个 assistant tool_call 都能得到对应的 tool 消息。
+
+
+阶段 2：最小 Agent 循环【已完成】
+
+学习目的：独立实现 Agent 的核心运行机制。
+
+学习内容：
+
+- 调用模型。
+- 判断 message.tool_calls。
+- 解析模型生成的 JSON 参数。
+- 通过注册表寻找并执行工具。
+- 将结果写回 messages。
+- 再次调用模型，直到产生最终回答。
+- tool_choice="auto"、"required"、"none" 对行为的影响。
+
+核心控制流：
+
+用户问题
+  -> 模型决策
+  -> 有工具调用：执行并写回，然后继续循环
+  -> 无工具调用：返回最终答案
+
+验收要求：
+
+- 能从空白文件写出最小循环。
+- 理解为什么每轮都使用 required 会破坏正常停止。
+- 理解一轮模型回复可能包含多个 tool_calls。
+
+
+阶段 3：停止条件与基础错误处理【已完成】
+
+学习目的：防止 Agent 无限循环或因一次工具错误整体崩溃。
+
+学习内容：
+
+- 最大模型决策轮数 MAX_AGENT_STEPS。
+- 最大工具调用数 MAX_TOOL_CALLS。
+- 非法 JSON 参数。
+- 未注册工具。
+- 工具函数抛出异常。
+- 业务失败与程序异常的区别。
+- 瞬时故障的有限重试。
+
+验收要求：
+
+- 所有 tool_calls 即使失败也必须写回 tool result。
+- 能区分“工具正常运行但没找到数据”和“工具自身异常”。
+- 能解释模型工具调用次数与底层实际尝试次数的区别。
+
+
+阶段 4：迁移练习——Note Agent【已完成】
+
+学习目的：证明掌握的是通用 Agent 机制，而不是只会修改计算器示例。
+
+实践工具：
+
+- search_notes(keyword)：根据关键词发现 note_id。
+- get_note(note_id)：根据 ID 读取完整内容。
+
+核心信息流：
+
+用户问题
+  -> search_notes
+  -> 获得 note_id
+  -> get_note
+  -> 模型总结
+
+实践文件：
+
+- agent_homework/note_agent.py
+
+验收要求：
+
+- 能复用同一个 Agent 循环，更换工具后完成新任务。
+- 理解“先发现 ID，再读取内容”的工具依赖关系。
+- 能处理无搜索结果、不存在的 ID 和工具异常。
+
+
+阶段 5：状态、节点与路由【已完成】
+
+学习目的：理解简单 Agent 如何逐步演变成状态驱动工作流。
+
+学习内容：
+
+- state 是程序继续运行所需的全部信息。
+- messages 是给模型的上下文，只是 state 的一部分。
+- trace 是给开发者的执行记录，不等于 messages。
+- answer 是最终业务输出。
+- call_model 是模型节点。
+- execute_tools 是工具节点。
+- route_after_model 是条件路由。
+- run_agent 是工作流编排器。
+
+核心结构：
+
+START
+  -> call_model
+  -> route_after_model
+     -> tools：execute_tools -> call_model
+     -> end：保存答案 -> END
+
+验收要求：
+
+- 能解释 state 在开始时创建一次、之后持续更新，而不是每轮复制一份。
+- 能区分节点“做事情”和路由“决定下一步”。
+- 理解固定工作流结构可以产生不同的动态执行路径。
+
+
+阶段 6：检查点与恢复【已完成，属于状态章节的实践】
+
+学习目的：理解显式状态为什么能支持进程中断后的继续执行。
+
+学习内容：
+
+- 运行时 state 与磁盘 checkpoint 的区别。
+- last_message 等 SDK 临时对象为什么不应直接序列化。
+- running 与 completed 状态。
+- 安全检查点必须位于完整的 assistant(tool_calls) -> tool(results) 之后。
+- 读取检查点，从保存的 step 和 messages 继续执行。
+
+验收要求：
+
+- 中途暂停时 answer 为 None、status 为 running。
+- 恢复后不重复执行已经完成的步骤。
+- 完成后重新保存，磁盘状态变为 completed。
+
+
+阶段 7：研究工作流回读【已完成】
+
+学习目的：用已经掌握的底层知识重新理解 research_agent。
+
+整体结构：
+
+Planner 模型节点
+  -> Search Executor
+  -> Ranker
+  -> Reader Agent
+  -> Evidence Extractor 模型节点
+  -> Writer 模型节点
+
+关键结论：
+
+- create_search_plan 使用模型，但没有工具反馈循环，因此是模型节点，不是 Agent。
+- execute_search_plan 和 rank_candidate_papers 是确定性 Python 节点。
+- run_reader_agent 具有模型—工具—观察—再决策循环，因此是真正的 Agent。
+- extract_research_evidence 和 run_writer 都是单次模型处理节点，不是 Agent。
+- run_research_workflow 是固定顺序的工作流编排器。
+- 当前系统准确地说是“包含一个 Reader Agent 的混合研究工作流”，不是严格意义
+  上的多 Agent 系统。
+
+同时掌握：
+
+- research_task 控制 Reader 能看到什么。
+- READING_TOOLS 控制 Reader 能调用什么。
+- messages 保存 Reader 推理上下文。
+- collected_papers 保存业务事实。
+- research_evidence 是 Reader 和 Writer 之间的结构化数据合同。
+- source_facts、reasoned_inferences、missing_information 必须区分。
+
+已完成验证：
+
+- research_agent 端到端运行成功。
+- Planner、三次搜索、Reader、Evidence、Writer 全部走通。
+- 工具 Schema、注册表和 Reader 完成指令已修正。
+
+
+阶段 8：Supervisor 与多 Agent 协作【当前阶段】
+
+学习目的：理解多个独立 Agent 如何通过明确协议协作，以及它与固定工作流有什么
+本质区别。
+
+当前进度：阶段 8.1——Worker 包装。
+
+计划内容：
+
+8.1 Agent-as-a-Tool
+
+- 将 calculator Agent 包装为 calculator worker。
+- 将 note Agent 包装为 note worker。
+- 统一 Worker 输入 task 和输出 worker、answer。
+- 理解外层看见的是工具，内层运行的是完整 Agent。
+
+8.2 Supervisor 工具定义
+
+- 为两个 Worker 编写工具 Schema。
+- 建立 Supervisor 专用 Registry。
+- 明确 Supervisor 只负责任务选择和委托，不直接执行底层业务工具。
+
+8.3 Supervisor Agent 循环
+
+- Supervisor 根据问题选择 Worker。
+- Worker 结果作为 tool message 写回 Supervisor。
+- Supervisor 根据 Worker 结果生成最终答复。
+- 验证笔记问题和计算问题会走向不同 Worker。
+
+8.4 多 Worker 顺序协作
+
+- 处理同时需要查笔记和计算的问题。
+- Supervisor 可在不同轮次调用多个 Worker。
+- 区分一轮并行委托和多轮依赖委托。
+- 保证每个委托都有明确结果并能正常停止。
+
+8.5 多 Agent 边界与代价
+
+- Worker 使用各自独立的 messages、提示词和工具。
+- Supervisor 不需要看到 Worker 的全部内部轨迹，只接收结构化结果。
+- 理解上下文隔离、调用成本、延迟和重复委托风险。
+- 判断何时固定工作流优于多 Agent。
+
+阶段 8 验收要求：
+
+- 能解释 Agent-as-a-Tool 的两层循环。
+- 能独立写出 Supervisor 的委托工具和消息写回。
+- 能说明 Supervisor 与 Worker 各自的职责和停止条件。
+- 能判断一个任务是否真的值得拆成多个 Agent。
+
+
+阶段 9：Memory——跨轮与跨任务记忆【后续主线】
+
+学习目的：理解 Memory 不是简单地把所有历史消息永久塞给模型，而是对信息进行
+选择、保存、检索、更新和遗忘。
+
+计划内容：
+
+9.1 Memory 与 State 的区别
+
+- state 保存一次运行当前进行到哪里。
+- working memory 保存当前推理所需的 messages 和中间结果。
+- short-term memory 保存同一会话内的上下文。
+- long-term memory 跨会话保存用户偏好、事实或历史经验。
+- checkpoint 用于恢复程序执行，不等于长期记忆。
+
+9.2 最小长期记忆
+
+- 使用本地 JSON 保存少量用户事实。
+- 实现 remember(key, value)、recall(key) 和 forget(key)。
+- 将 Memory 工具接入已经掌握的 Agent 循环。
+- 验证程序重新启动后仍能回答之前保存的信息。
+
+9.3 记忆写入策略
+
+- 区分用户明确要求记住的信息和模型自行推测的信息。
+- 不把每句话都写入长期记忆。
+- 保存来源、时间和可更新字段。
+- 新信息与旧信息冲突时进行覆盖、合并或请求确认。
+
+9.4 记忆检索策略
+
+- 简单键值检索。
+- 关键词检索与相关记忆选择。
+- 只把与当前问题相关的记忆注入 messages。
+- 理解上下文长度、噪声和隐私风险。
+
+阶段 9 验收要求：
+
+- 能解释 state、checkpoint、messages 和 long-term memory 的区别。
+- 能实现一个跨进程保存和读取的最小 Memory Agent。
+- 能说明什么信息应记住、什么信息不应自动记住。
+- 能避免把整个历史文件无条件发送给模型。
+
+
+阶段 10：MCP——标准化外部能力接入【后续主线】
+
+学习目的：理解 MCP 解决的是 Agent 应用与外部工具、资源之间的标准化连接问题，
+它本身不是模型、Agent 或 Memory。
+
+计划内容：
+
+10.1 MCP 与当前工具系统的对应关系
+
+- 当前 TOOLS 是手写工具描述。
+- 当前 TOOL_REGISTRY 是本地函数注册表。
+- MCP Server 对外暴露工具或资源。
+- MCP Client 发现并调用 Server 提供的能力。
+- Agent Host 将发现的能力交给模型使用。
+
+10.2 MCP 基本信息流
+
+Agent Host
+  -> MCP Client
+  -> MCP Server
+  -> 本地文件、数据库或外部服务
+  -> 结构化结果返回 Agent
+
+10.3 最小本地 MCP 实践
+
+- 将 search_notes 和 get_note 改造成一个独立的本地 MCP Server。
+- 使用 MCP Client 列出可用工具。
+- 调用工具并读取结构化结果。
+- 再将这些工具接入 Agent 循环。
+
+10.4 MCP Resources 与 Tools
+
+- Tool 表示可执行动作，具有参数和结果。
+- Resource 表示可读取的上下文或数据。
+- 判断笔记列表、单篇笔记和搜索操作分别适合哪种能力。
+- 不把所有数据都错误地设计成可执行工具。
+
+10.5 MCP 安全边界
+
+- Server 暴露什么，Agent 才能访问什么。
+- 区分只读操作和有副作用的操作。
+- 理解参数验证、权限、确认和不可信工具结果。
+- 不因接入 MCP 而绕过现有工具预算与停止条件。
+
+阶段 10 验收要求：
+
+- 能解释 MCP Host、Client、Server、Tool 和 Resource。
+- 能说明 MCP 与普通 function calling 的联系和区别。
+- 能独立运行一个最小本地 MCP Server，并从 Client 调用它。
+- 能把 MCP 工具转换为模型可用的工具描述并写回调用结果。
+- 能判断某个需求是否真的需要 MCP，而不是为了协议而增加复杂度。
+
+
+阶段 11：RAG——外部知识检索与生成【后续主线】
+
+学习目的：理解 RAG 解决的是“模型回答前如何取得相关外部知识”，而不是让模型
+通过训练永久记住这些知识。
+
+计划内容：
+
+11.1 RAG 与相邻概念
+
+- RAG 与普通关键词搜索的区别。
+- RAG 与 Agent 工具调用的区别。
+- RAG 与长期 Memory 的区别。
+- RAG 与微调的区别。
+
+11.2 最小 RAG 信息流
+
+文档
+  -> 切分 chunk
+  -> 生成向量 embedding
+  -> 建立索引
+  -> 根据问题检索相关 chunk
+  -> 将证据放入模型上下文
+  -> 基于证据回答
+
+11.3 本地笔记 RAG
+
+- 使用本地笔记作为语料。
+- 先实现不依赖框架的关键词/相似度检索。
+- 再加入 embedding 与向量检索。
+- 返回来源 ID 和原文片段，避免只返回无来源答案。
+
+11.4 论文 RAG
+
+- 对论文摘要或 PDF 文本进行切分。
+- 按问题检索具体方法、实验或局限相关片段。
+- 将检索结果提供给 Reader，而不是无条件注入整篇 PDF。
+- 区分“论文搜索”和“论文内部内容检索”。
+
+阶段 11 验收要求：
+
+- 能完整解释 ingestion、chunking、embedding、retrieval 和 generation。
+- 能实现一个带来源的最小本地 RAG。
+- 能判断某个需求应使用关键词搜索、RAG、Memory 还是普通工具。
+- 能说明检索正确与最终回答正确是两个不同问题。
+
+
+阶段 12：OpenAI SDK、Agents SDK 与 LangChain/LangGraph【后续主线】
+
+学习目的：在已经掌握手写底层机制之后，理解不同 SDK 和框架分别封装了什么，
+避免把框架 API 当作 Agent 原理。
+
+计划内容：
+
+12.1 OpenAI Python SDK
+
+- 复盘当前项目已经使用的 OpenAI 客户端、messages 和 tool calling。
+- 区分 SDK、HTTP API、模型和 Agent。
+- 学习结构化输出、流式输出和调用错误的统一处理。
+- 根据学习时的官方文档选择适用的 API 形态，不凭旧示例硬编码。
+
+12.2 OpenAI Agents SDK
+
+- 理解 Agent、Tool、Handoff、Runner、Tracing 等框架抽象。
+- 将手写 Supervisor 示例迁移为 Agents SDK 版本。
+- 对照指出哪些循环、工具分派和交接逻辑由 SDK 接管。
+- 保留一个手写版本作为原理参照。
+
+12.3 LangChain
+
+- 学习模型、Prompt、Tool、Retriever 和结构化输出等组件。
+- 使用 LangChain 重建一个最小 Note Agent 或 RAG 链。
+- 不使用不透明的一键式封装掩盖消息协议。
+
+12.4 LangGraph
+
+- 将已经掌握的 state、node、route 和 checkpoint 映射到图工作流。
+- 迁移 note_agent 的模型节点和工具节点。
+- 再选择性迁移 research_agent，而不是一次重写全部代码。
+
+12.5 框架选择
+
+- 简单 API 调用优先使用底层 SDK。
+- 固定链式处理不必强行使用 Agent 框架。
+- 需要状态图、分支和恢复时再考虑 LangGraph。
+- 需要 Agent、handoff 和工具编排时再考虑 Agents SDK。
+- 根据项目需求选择，不追求同时使用所有框架。
+
+阶段 12 验收要求：
+
+- 能解释 OpenAI Python SDK 与 OpenAI Agents SDK 的区别。
+- 能指出 LangChain 和 LangGraph 的职责差异。
+- 能将一个手写 Agent 迁移到框架，并逐项说明被封装的底层逻辑。
+- 能判断不使用框架何时反而更简单。
+
+
+阶段 13：微调——改变稳定行为而非注入实时知识【后续主线】
+
+学习目的：理解何时需要微调，以及为什么多数知识问答问题应先考虑 Prompt、RAG
+或工具，而不是直接训练模型。
+
+计划内容：
+
+13.1 微调适用边界
+
+- 适合稳定输出格式、风格、分类方式和特定任务行为。
+- 不适合频繁变化的知识更新。
+- 不用微调替代数据库、搜索工具或 RAG。
+- 在 Prompt 和基础工作流尚未稳定前不急于微调。
+
+13.2 数据准备
+
+- 明确输入输出任务定义。
+- 收集高质量示例并清理矛盾样本。
+- 划分训练集和验证集。
+- 检查隐私、授权和数据泄漏风险。
+
+13.3 基线与训练
+
+- 先保存未微调模型的基线表现。
+- 根据学习时的官方文档准备训练格式和创建任务。
+- 训练后在未见过的验证任务上比较，而不是只看训练样本。
+
+13.4 与 Agent/RAG 组合
+
+- Agent 决定何时行动。
+- RAG 提供当前外部知识。
+- Memory 保存跨会话信息。
+- 微调改善稳定的模型行为。
+- MCP 标准化外部能力连接。
+
+阶段 13 验收要求：
+
+- 能判断一个问题是否真的需要微调。
+- 能解释为什么微调不能可靠替代 RAG 获取最新事实。
+- 能准备小型高质量数据集并保留独立验证集。
+- 能用基线比较判断微调是否真正带来收益。
+
+
+阶段 14：课程总结与独立设计【后续主线】
+
+学习目的：摆脱示例代码，独立设计一个新的 Agent 系统。
+
+计划内容：
+
+- 给定一个新任务，先判断普通函数、固定工作流、单 Agent、多 Agent中哪个足够。
+- 设计工具 Schema 和 Registry。
+- 设计状态字段、节点、路由和停止条件。
+- 标注哪些模块是真正 Agent，哪些只是模型节点。
+- 完成一个不依赖现有研究代码的小型综合作业。
+- 最后回看 research_agent，形成自己的架构说明和改进清单。
+
+阶段 14 验收要求：
+
+- 不依赖逐行提示完成主体设计。
+- 能画出信息流和控制流。
+- 能解释每个模型调用存在的必要性。
+- 能删除不必要的 Agent、循环或状态，而不是追求结构越复杂越好。
+
+
+四、当前不进入的可选工程阶段
+----------------------------
+
+以下内容有价值，但不属于当前核心教学主线，完成阶段 9 后再按需要选择：
+
+- 自动化 Agent eval、模型评分器和大规模测试集。
+- 完整 trace、指标监控和可视化面板。
+- 并发工具调用与异步执行优化。
+- 工具缓存、幂等键和分布式去重。
+- 完整 JSON Schema/Pydantic 嵌套验证。
+- 数据库持久化、队列、任务调度和服务部署。
+- 权限隔离、人工审批和安全策略。
+- 多模型路由、成本优化和生产级重试策略。
+
+这些内容只有在解决明确问题时才加入，不作为“Agent 越高级就必须拥有”的功能。
+
+
+五、后续每次教学的执行方式
+--------------------------
+
+当用户说“继续”时，按以下顺序执行：
+
+1. 查看本文件的“当前阶段”。
+2. 检查上一小步代码是否完成。
+3. 只讲下一小步的新概念及其目的。
+4. 用户先按理解实现，助手再检查。
+5. 通过运行或明确解释完成验收。
+6. 更新当前进度后再进入下一小步。
+
+当前明确的下一步：
+
+在 agent_homework/supervisor_agent.py 中完成并测试：
+
+- delegate_to_calculator(task)
+- delegate_to_note_worker(task)
+
+确认两个 Worker 都可以独立接收任务，并统一返回：
+
+{
+  "worker": "calculator 或 note",
+  "answer": "Worker 的最终答案"
+}
+
+完成后进入阶段 8.2：为 Supervisor 定义 Worker 工具 Schema 和 Registry。

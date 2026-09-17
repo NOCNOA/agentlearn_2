@@ -17,7 +17,7 @@ sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 # 添加项目根目录到 sys.path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
+from agent_homework.evaluate_research_agent import evaluate_state
 from tools.planner import *
 
 from tools.Tool_desc import TOOLS
@@ -53,6 +53,71 @@ load_dotenv()
 
 _client: OpenAI | None = None
 
+def validate_string_list(value, field_path):
+    if not isinstance(value, list):
+        raise ValueError(
+            f"{field_path} must be a list."
+        )
+
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError(
+                f"Every item in {field_path} must be a string."
+            )
+
+    return value
+
+def validate_paper_evidence(paper, index):
+    path = f"papers[{index}]"
+
+    if not isinstance(paper, dict):
+        raise ValueError(f"{path} must be a dictionary.")
+
+    for field_name in ["arxiv_id", "title", "url"]:
+        value = paper.get(field_name)
+
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(
+                f"{path}.{field_name} must be a non-empty string."
+            )
+
+    source_facts = paper.get("source_facts")
+
+    if not isinstance(source_facts, dict):
+        raise ValueError(
+            f"{path}.source_facts must be a dictionary."
+        )
+
+    for field_name in ["research_problem", "method"]:
+        value = source_facts.get(field_name)
+
+        if value is not None and not isinstance(value, str):
+            raise ValueError(
+                f"{path}.source_facts.{field_name} "
+                "must be a string or null."
+            )
+
+    validate_string_list(
+        source_facts.get("contributions"),
+        f"{path}.source_facts.contributions",
+    )
+
+    validate_string_list(
+        source_facts.get("reported_results"),
+        f"{path}.source_facts.reported_results",
+    )
+
+    validate_string_list(
+        paper.get("explicit_limitations"),
+        f"{path}.explicit_limitations",
+    )
+
+    validate_string_list(
+        paper.get("missing_information"),
+        f"{path}.missing_information",
+    )
+
+    return paper
 
 def get_client() -> OpenAI:
     """Create the LLM client only when a workflow step needs it."""
@@ -410,7 +475,51 @@ def parse_json_output(content: str) -> dict:
         raise RuntimeError(
             f"Agent returned invalid JSON:\n{json_text}"
         ) from exc
+def validate_research_evidence(evidence: dict) -> dict:
+    if not isinstance(evidence, dict):
+        raise ValueError(
+            "Research evidence must be a dictionary."
+        )
 
+    papers = evidence.get("papers")
+    evidence_summary = evidence.get("evidence_summary")
+    overall_missing_information = evidence.get(
+        "overall_missing_information"
+    )
+
+    if not isinstance(papers, list):
+        raise ValueError(
+            "research_evidence.papers must be a list."
+        )
+
+    if not papers:
+        raise ValueError(
+            "research_evidence.papers cannot be empty."
+        )
+
+    if not isinstance(evidence_summary, str):
+        raise ValueError(
+            "research_evidence.evidence_summary must be a string."
+        )
+
+    if not isinstance(overall_missing_information, list):
+        raise ValueError(
+            "overall_missing_information must be a list."
+        )
+
+    for item in overall_missing_information:
+        if not isinstance(item, str):
+            raise ValueError(
+                "Every overall_missing_information item "
+                "must be a string."
+            )
+    validated_papers = []
+
+    for index, paper in enumerate(papers):
+        validated_papers.append(
+            validate_paper_evidence(paper, index)
+        )
+    return evidence
 
 WRITER_PROMPT = """
 你是论文调研工作流中的 Writer。
@@ -543,8 +652,12 @@ def run_research_workflow(
     )
 
     # 6. 解析结构化证据
-    state.research_evidence = (
-        parse_json_output(reader_content)
+    parsed_evidence = parse_json_output(
+        reader_content
+    )
+
+    state.research_evidence = validate_research_evidence(
+        parsed_evidence
     )
 
     print("\n========== Research Evidence ==========")
@@ -570,7 +683,16 @@ def run_default_research() -> None:
     """
 
     state = run_research_workflow(question)
+    evaluation = evaluate_state(state)
 
+    print("\n========== Evaluation ==========")
+    print(
+        json.dumps(
+            evaluation,
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     print("\n========== Final Report ==========")
     print(state.final_report)
 

@@ -8,6 +8,7 @@ NOTES = {
     "1": "Agent 通过工具调用访问外部能力。",
     "2": "messages 保存模型当前对话历史。",
     "3": "ResearchState 保存整个工作流状态。",
+    "4": "当前练习中的工具调用预算示例为 4 次。",
 }
 
 def search_notes(keyword):
@@ -121,8 +122,31 @@ def call_model(state):
     )
 
     return state
+def save_checkpoint(state, file_path):
+    checkpoint = {
+        "messages": state["messages"],
+        "trace": state["trace"],
+        "tool_call_count": state["tool_call_count"],
+        "answer": state["answer"],
+        "step": state["step"],
+        "status": state["status"],
+    }
 
+    with open(file_path, "w", encoding="utf-8") as file:
+        json.dump(
+            checkpoint,
+            file,
+            ensure_ascii=False,
+            indent=2,
+        )
+def load_checkpoint(file_path):
+    with open(file_path, "r", encoding="utf-8") as file:
+        checkpoint = json.load(file)
 
+    # last_message 是运行时临时状态，不从 JSON 中恢复
+    checkpoint["last_message"] = None
+
+    return checkpoint
 def execute_tools(state, message,i):
     for tool_call in message.tool_calls:
         state["tool_call_count"] += 1
@@ -194,7 +218,6 @@ def execute_tools(state, message,i):
             }
         )
     return state
-
 def route_after_model(state):
     message = state["last_message"]
 
@@ -203,51 +226,82 @@ def route_after_model(state):
 
     return "end"
 
-def run_agent(user_input: str):
+def run_agent(
+    user_input=None,state=None,checkpoint_path=None,pause_after_tools=False,):
+    if state is None:
+        if user_input is None:
+            raise ValueError(
+                "user_input is required when no state is provided"
+            )
 
-    state = {
-        "messages": [
-            {"role": "system", "content": READER_PROMPT},
-            {"role": "user", "content": user_input},
-        ],
-        "step": 0,
-        "trace": [],
-        "tool_call_count": 0,
-        "answer": None,
-        "last_message": None,
-    }
-    for i in range(MAX_AGENT_STEPS):
-        print(f"\n========== Agent Step {i} ==========")
-        #1\模型调用
-        state["step"] = i + 1
-        state = call_model(state)
-        message = state["last_message"]
-        print("====model output====")
-        print(message.content)
-        # 3. 没有则返回最终回答
-        next = route_after_model(state)
-        state["trace"].append(
-            {
-                "step": state["step"],
-                "node": "route_after_model",
-                "route": next,
-            }
-        )
-        if next == "end":
-            print( f"\nFinish. Using Tools for {state['tool_call_count']} times" )
-            state["answer"] = message.content
-            return state
-        # 4. 有则保存 assistant 消息
-        if next == "tools":
-            state["messages"].append(message.model_dump(exclude_none=True))#上一轮信息保存为字典对象，加到messages当中
-            state = execute_tools(state, message, i)
+        state = {
+            "messages": [
+                {"role": "system", "content": READER_PROMPT},
+                {"role": "user", "content": user_input},
+            ],
+            "trace": [],
+            "tool_call_count": 0,
+            "answer": None,
+            "last_message": None,
+            "step": 0,
+            "status": "running",
+        }
 
+    if state["status"] == "completed":
+        return state
+    for i in range(state["step"], MAX_AGENT_STEPS):
+            state["step"] = i + 1
+            print(f"\n========== Agent Step {i} ==========")
+            #1\模型调用
+            state = call_model(state)
+            message = state["last_message"]
+            print("====model output====")
+            print(message.content)
+            # 3. 没有则返回最终回答
+            next_node = route_after_model(state)
+            state["trace"].append(
+                {
+                    "step": state["step"],
+                    "node": "route_after_model",
+                    "route": next_node,
+                }
+            )
+            if next_node == "end":
+                print( f"\nFinish. Using Tools for {state['tool_call_count']} times" )
+                state["answer"] = message.content
+                state["status"] = "completed"
+                if checkpoint_path is not None:
+                    save_checkpoint(state, checkpoint_path)
+                return state
+            # 4. 有则保存 assistant 消息
+            if next_node == "tools":
+                state["messages"].append(message.model_dump(exclude_none=True))#上一轮信息保存为字典对象，加到messages当中
+                state = execute_tools(state, message, i)
+                if checkpoint_path is not None:
+                    save_checkpoint(state, checkpoint_path)
+
+                if pause_after_tools:
+                    print("\nWorkflow paused after tools.")
+                    return state
     raise RuntimeError("Agent reached its step limit")
-    
-def main():
-    question = "请读取编号为 999 的笔记，并告诉我内容。"
-    state = run_agent(question)
 
+def main1():
+    state = load_checkpoint(
+        "agent_homework/note_agent_checkpoint.json"
+    )
+
+    state = run_agent(state=state)
+
+    print(state["status"])
+    print(state["answer"])
+
+def main():
+    question = "请读取编号为 1 的笔记，并告诉我内容。"
+    state = run_agent(question)
+    save_checkpoint(
+        state,
+        "agent_homework/note_agent_checkpoint.json",
+    )
     print("\n========== Trace ==========")
     for item in state["trace"]:
         print(json.dumps(item, ensure_ascii=False, indent=2))
@@ -255,6 +309,42 @@ def main():
     print("\n========== Final Answer ==========")
     print(state["answer"])
 
+def main2():
+    question = "请找到所有与 Agent 状态有关的笔记，读取相关内容并总结。"
 
+    state = run_agent(
+        user_input=question,
+        checkpoint_path="agent_homework/note_agent_checkpoint.json",
+        pause_after_tools=True,
+    )
+
+    print("status:", state["status"])
+    print("step:", state["step"])
+    print("answer:", state["answer"])
+
+def main3():
+    question = "请找到所有与 Agent 状态有关的笔记，读取相关内容并总结。"
+
+    state = run_agent(
+        user_input=question,
+        checkpoint_path="agent_homework/note_agent_checkpoint.json",
+        pause_after_tools=True,
+    )
+
+    print("status:", state["status"])
+    print("step:", state["step"])
+    print("answer:", state["answer"])
+    
+def main4():
+    path = "agent_homework/note_agent_checkpoint.json"
+    state = load_checkpoint(
+        path
+    )
+
+    state = run_agent(state=state,checkpoint_path=path)
+
+    print("status:", state["status"])
+    print("step:", state["step"])
+    print("answer:", state["answer"])
 if __name__ == "__main__":
-    main()
+    main4()
